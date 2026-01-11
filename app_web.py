@@ -12,7 +12,8 @@ from io import BytesIO
 
 # 1. Configurações Iniciais
 st.set_page_config(page_title="ADS Traffic Analytics", layout="wide")
-device = 0 if torch.cuda.is_available() else 'cpu'
+# No Streamlit Cloud, raramente há GPU disponível no plano free, então forçamos CPU se necessário
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 LINES_FILE = "lines.json"
 
 # Lógica de Cruzamento
@@ -35,7 +36,12 @@ TRADUCAO = {"car": "carro", "van": "carro", "bus": "onibus", "truck": "caminhao"
 
 @st.cache_resource
 def load_models():
-    return YOLO("C:/Users/mathe/Downloads/dataset5/runs/TREINO_FINAL_CASA/weights/best.pt")
+    # AJUSTE ADS: Caminho relativo para funcionar no GitHub/Streamlit Cloud
+    model_path = "best.pt" 
+    if not os.path.exists(model_path):
+        st.error(f"Erro: O arquivo {model_path} não foi encontrado no repositório!")
+        st.stop()
+    return YOLO(model_path)
 
 def load_line_config():
     if os.path.exists(LINES_FILE):
@@ -83,10 +89,12 @@ with st.sidebar:
         st.rerun()
 
 # 3. Processamento
-upload = st.file_uploader("Vídeo de Tráfego", type=['mp4', 'avi', 'mov'])
+st.title("🚗 Sistema de Monitoramento de Tráfego")
+upload = st.file_uploader("Suba o vídeo para análise", type=['mp4', 'avi', 'mov'])
 
 if upload:
     model = load_models()
+    # Usando tempfile para gerenciar o vídeo no servidor Linux
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     tfile.write(upload.read())
     path_video = tfile.name
@@ -98,7 +106,7 @@ if upload:
         frame_placeholder = st.empty()
     with col_stats:
         chart_area = st.empty()
-        st.write("📋 **Logs (Índice ajustado)**")
+        st.write("📋 **Últimas Passagens**")
         log_placeholder = st.empty()
 
     if st.button("🚀 Iniciar Análise"):
@@ -107,6 +115,7 @@ if upload:
             if not ret: break
 
             frame_res = cv2.resize(frame, (640, 360))
+            # persist=True é vital para o rastreamento (tracking)
             results = model.track(frame_res, persist=True, device=device, verbose=False, conf=0.25)[0]
 
             if results.boxes.id is not None:
@@ -115,6 +124,7 @@ if upload:
                 clss = results.boxes.cls.int().cpu().tolist()
 
                 for box, obj_id, cls in zip(boxes, ids, clss):
+                    # Ponto base do objeto (centro inferior da caixa)
                     curr_p = (int((box[0] + box[2]) / 2), int(box[3]))
                     
                     if obj_id not in st.session_state.id_to_class:
@@ -126,7 +136,6 @@ if upload:
                     if obj_id in st.session_state.tracked_objects:
                         prev_p = st.session_state.tracked_objects[obj_id]
                         
-                        # --- LÓGICA DE CRUZAMENTO RESTAURADA ---
                         for label, cfg in config_linhas.items():
                             if check_cross(prev_p, curr_p, cfg):
                                 if not st.session_state.entry_lines[obj_id]:
@@ -143,7 +152,7 @@ if upload:
                     
                     st.session_state.tracked_objects[obj_id] = curr_p
 
-            # Visualização do Frame com Linhas
+            # Desenho das linhas de sensores no frame
             ann_frame = results.plot(labels=True, conf=False)
             for L, cfg in config_linhas.items():
                 p = int(cfg["pos"] * 0.5)
@@ -156,10 +165,9 @@ if upload:
 
             frame_placeholder.image(ann_frame, channels="BGR")
             
-            # Atualização de Gráficos e Tabela
+            # Atualização da Dashboard
             if st.session_state.passages:
                 df = pd.DataFrame(st.session_state.passages)
-                # Começa contagem em 1 na tela
                 df_visual = df.copy()
                 df_visual.index = df_visual.index + 1
                 
@@ -169,3 +177,4 @@ if upload:
                 log_placeholder.dataframe(df_visual.tail(8), use_container_width=True)
 
         cap.release()
+        os.remove(path_video) # Limpa o arquivo temporário após o uso
