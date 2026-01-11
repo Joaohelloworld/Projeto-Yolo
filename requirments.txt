@@ -1,0 +1,6 @@
+ultralytics
+opencv-python-headless
+pandas
+xlsxwriter
+torch
+torchvision
