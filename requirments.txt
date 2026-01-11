@@ -4,3 +4,4 @@ pandas
 xlsxwriter
 torch
 torchvision
+lapx
